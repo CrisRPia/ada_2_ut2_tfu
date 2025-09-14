@@ -1,7 +1,8 @@
 ### Explicación de Endpoints
 
 La API está diseñada para simular una arquitectura de **cifrado del lado del
-cliente** (_client-side encryption_) o de **conocimiento cero** (_zero-knowledge_), similar a la que utiliza Bitwarden.
+cliente** (_client-side encryption_) o de **conocimiento cero**
+(_zero-knowledge_), similar a la que utiliza Bitwarden.
 
 El principio fundamental es que el servidor actúa como un "almacenamiento tonto"
 que solo guarda datos cifrados y nunca tiene acceso a la contraseña maestra
@@ -29,6 +30,11 @@ del usuario (por ejemplo, en su navegador).
   usuario. Este endpoint está protegido y requiere un JWT válido. Es
   importante destacar que **solo devuelve un bloque de texto cifrado**, ya
   que el servidor no tiene forma de leer su contenido.
+- `PUT /server/vault`: Actualiza la bóveda cifrada del usuario. Recibe un
+  cuerpo JSON con el nuevo contenido cifrado (ej: `{"vault": "texto..."}`)
+  y lo reemplaza por completo en la base de datos para el usuario
+  autenticado. Al igual que el `GET`, este endpoint no puede leer ni validar
+  el contenido que guarda, solo lo almacena.
 
 #### `/client` - Simulación de Lógica del Cliente
 
@@ -44,7 +50,8 @@ en el dispositivo del usuario.
       cifrada actual.
   4.  Descifra la bóveda en memoria, le añade la nueva información y
       **vuelve a cifrar todo el contenido**.
-  5.  Guarda el nuevo bloque de texto cifrado en la base de datos.
+  5.  Finalmente, llama a `PUT /server/vault` para guardar este nuevo bloque
+      de datos cifrados, reemplazando el anterior.
 - `POST /client/decrypt-vault`: Simula el proceso de visualizar las
   contraseñas.
   1.  Recibe la `master_password` del usuario.
@@ -76,8 +83,9 @@ Este diseño permite demostrar las tres tácticas de arquitectura seleccionadas:
 
 3.  **Cifrado de Datos (Seguridad - Resistir a ataques)**: Esta es la táctica
     central demostrada con la arquitectura _zero-knowledge_. La base de datos
-    (representada por el endpoint `/server/vault`) **solo almacena datos
+    (representada por los endpoints `/server/vault`) **solo almacena datos
     cifrados**. El servidor nunca tiene acceso a la contraseña maestra ni a la
     clave de cifrado, por lo que no puede descifrar los datos de los usuarios.
     Esto garantiza la confidencialidad de la información incluso si la base
-    de datos es comprometida, cumpliendo con la táctica de **cifrado de datos** para resistir ataques.
+    de datos es comprometida, cumpliendo con la táctica de **cifrado de datos**
+    para resistir ataques.
