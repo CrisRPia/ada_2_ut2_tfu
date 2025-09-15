@@ -1,68 +1,47 @@
-### Explicación de Endpoints
+### Arquitectura y Simulación
 
-La API está diseñada para simular una arquitectura de **cifrado del lado del
-cliente** (_client-side encryption_) o de **conocimiento cero**
-(_zero-knowledge_), similar a la que utiliza Bitwarden.
+Esta API demuestra una arquitectura de **conocimiento cero** (_zero-knowledge_),
+donde el servidor no tiene acceso a los datos sensibles del usuario. Para
+lograrlo, el proyecto se divide en tres tipos de endpoints:
 
-El principio fundamental es que el servidor actúa como un "almacenamiento tonto"
-que solo guarda datos cifrados y nunca tiene acceso a la contraseña maestra
-del usuario ni a la clave de cifrado. Para demostrar este flujo sin necesidad
-de un front-end, se crearon endpoints especiales bajo la ruta `/client/...`
-que simulan las operaciones criptográficas que ocurrirían en la aplicación
-del usuario (por ejemplo, en su navegador).
+1.  **`/auth`**: Maneja la autenticación y registro de usuarios.
+2.  **`/server`**: Actúa como un almacenamiento seguro pero "tonto"
+    (_dumb storage_). Solo guarda y sirve un bloque de datos cifrados sin
+    poder leerlos.
+3.  **`/client`**: Simula las operaciones criptográficas que ocurrirían en una
+    aplicación cliente. Estos endpoints reciben datos en texto plano y la
+    contraseña maestra para realizar el cifrado y descifrado.
 
 ---
 
-#### `/auth` - Autenticación y Registro
+### Cómo Ejecutar
 
-- `POST /auth/register`: Registra un nuevo usuario. Recibe un email y una
-  `master_password`. El servidor **nunca guarda la contraseña maestra**;
-  en su lugar, calcula un _hash_ de la misma y lo almacena para futuras
-  verificaciones.
-- `POST /auth/login`: Autentica a un usuario. Recibe el email y la
-  `master_password`. Si el _hash_ de la contraseña coincide con el
-  almacenado, devuelve un **JSON Web Token (JWT)** que se usará para
-  autorizar las siguientes peticiones.
+Para levantar la aplicación y la base de datos, ejecuta el siguiente comando
+en la raíz del proyecto:
 
-#### `/server` - Lógica del Servidor (Almacenamiento)
+```bash
+docker compose down -v && docker compose up --build
+```
 
-- `GET /server/vault`: Obtiene la "bóveda" (_vault_) de contraseñas del
-  usuario. Este endpoint está protegido y requiere un JWT válido. Es
-  importante destacar que **solo devuelve un bloque de texto cifrado**, ya
-  que el servidor no tiene forma de leer su contenido.
-- `PUT /server/vault`: Actualiza la bóveda cifrada del usuario. Recibe un
-  cuerpo JSON con el nuevo contenido cifrado (ej: `{"vault": "texto..."}`)
-  y lo reemplaza por completo en la base de datos para el usuario
-  autenticado. Al igual que el `GET`, este endpoint no puede leer ni validar
-  el contenido que guarda, solo lo almacena.
+---
 
-#### `/client` - Simulación de Lógica del Cliente
+### Cómo Probar
 
-Estos endpoints contienen la lógica que, en una aplicación real, se ejecutaría
-en el dispositivo del usuario.
+Una vez que la aplicación está en funcionamiento, la documentación interactiva
+de Swagger estará disponible para probar todos los endpoints.
 
-- `POST /client/encrypt-and-update-vault`: Simula el proceso de añadir o
-  actualizar una contraseña en la bóveda.
-  1.  Recibe la `master_password` y los datos en **texto plano** que se
-      quieren guardar.
-  2.  Deriva la clave de cifrado a partir de la `master_password`.
-  3.  Llama internamente a `GET /server/vault` para obtener la bóveda
-      cifrada actual.
-  4.  Descifra la bóveda en memoria, le añade la nueva información y
-      **vuelve a cifrar todo el contenido**.
-  5.  Finalmente, llama a `PUT /server/vault` para guardar este nuevo bloque
-      de datos cifrados, reemplazando el anterior.
-- `POST /client/decrypt-vault`: Simula el proceso de visualizar las
-  contraseñas.
-  1.  Recibe la `master_password` del usuario.
-  2.  Deriva la clave de cifrado, obtiene la bóveda del servidor y la
-      descifra en memoria para devolver los datos en texto plano.
+[**Abrir Documentación de Swagger**](http://localhost:8080/swagger/index.html) 🚀
 
-#### `/docs` - Documentación de la API
+El flujo de prueba recomendado es:
 
-- `GET /docs`: Presenta la documentación interactiva de la API generada con
-  Swagger / OpenAPI. Este endpoint permite visualizar y probar de forma
-  sencilla todos los demás endpoints disponibles.
+1.  Usar `POST /auth/register` para crear un nuevo usuario.
+2.  Copiar el `token` JWT de la respuesta.
+3.  Hacer clic en el botón "Authorize" en Swagger y pegar el token en el
+    formato `Bearer {token}`.
+4.  Usar `POST /client/encrypt-and-update-vault` para guardar de forma
+    segura las credenciales.
+5.  Usar `POST /client/decrypt-vault` para descifrar y ver las
+    credenciales guardadas.
 
 ---
 
@@ -71,21 +50,54 @@ en el dispositivo del usuario.
 Este diseño permite demostrar las tres tácticas de arquitectura seleccionadas:
 
 1.  **Gestionar Pedidos de Trabajo (Rendimiento)**: Se implementó
-    **Rate Limiting** en el endpoint `POST /auth/login`. Esto previene
-    ataques de fuerza bruta y protege el rendimiento del sistema al limitar
-    la cantidad de solicitudes de autenticación, cumpliendo con el requisito.
+    **Rate Limiting** utilizando un `FixedWindowLimiter` de ASP.NET Core. Esta
+    configuración permite un máximo de 4 peticiones cada 12 segundos,
+    previniendo ataques de fuerza bruta y protegiendo el rendimiento del
+    sistema. La configuración se encuentra en `Program.cs`:
+
+    ```csharp
+    builder.Services.AddRateLimiter(options =>
+    {
+        options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                partitionKey: httpContext.User.Identity?.Name
+                    ?? httpContext.Request.Headers.Host.ToString(),
+                factory: partition => new FixedWindowRateLimiterOptions
+                {
+                    AutoReplenishment = true,
+                    PermitLimit = 4,
+                    QueueLimit = 2,
+                    Window = TimeSpan.FromSeconds(12),
+                }
+            )
+        );
+
+        options.OnRejected = (context, cancellationToken) =>
+        {
+            if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            {
+                context.HttpContext.Response.Headers.RetryAfter = retryAfter.TotalSeconds.ToString();
+            }
+
+            context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            context.HttpContext.Response.WriteAsync(
+                "Too many requests. Please try again later.",
+                CancellationToken.None
+            );
+
+            return new ValueTask();
+        };
+    });
+    ```
 
 2.  **Autorización (Seguridad - Resistir a ataques)**: Todos los endpoints de
-    `/server` y `/client` están protegidos. Requieren un JWT válido que se
-    obtiene en el login. El sistema verifica que el JWT corresponda al
-    usuario dueño de los datos, impidiendo que un usuario acceda a la bóveda
-    de otro. Esto implementa la táctica de **autorización**.
+    `/server` y `/client` están protegidos y requieren un JWT válido. El
+    sistema verifica que el JWT corresponda al usuario dueño de los datos,
+    impidiendo que un usuario acceda a la bóveda de otro.
 
 3.  **Cifrado de Datos (Seguridad - Resistir a ataques)**: Esta es la táctica
-    central demostrada con la arquitectura _zero-knowledge_. La base de datos
-    (representada por los endpoints `/server/vault`) **solo almacena datos
-    cifrados**. El servidor nunca tiene acceso a la contraseña maestra ni a la
-    clave de cifrado, por lo que no puede descifrar los datos de los usuarios.
-    Esto garantiza la confidencialidad de la información incluso si la base
-    de datos es comprometida, cumpliendo con la táctica de **cifrado de datos**
-    para resistir ataques.
+    central. La base de datos, a través de los endpoints `/server/vault`,
+    **solo almacena un bloque de datos cifrados**. El servidor nunca tiene
+    acceso a la contraseña maestra ni a la clave de cifrado. Todo el proceso
+    criptográfico es simulado en los endpoints `/client/...`, garantizando la
+    confidencialidad de la información.

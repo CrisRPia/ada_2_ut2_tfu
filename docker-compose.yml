@@ -1,0 +1,33 @@
+services:
+  backend:
+    image: bitwardenclone_backend
+    container_name: bitwardenclone_backend
+    build:
+      context: ./bitwardenclone/
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=bitwarden_db
+      - DB_USER=user
+      - DB_PASSWORD=password
+
+  db:
+    image: postgres:16
+    container_name: bitwardenclone-db
+    restart: always
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=bitwarden_db
+    ports:
+      - "5432:5432"
+    volumes:
+      # Persist the database data on the host machine.
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
