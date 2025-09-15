@@ -36,8 +36,7 @@ El flujo de prueba recomendado es:
 
 1.  Usar `POST /auth/register` para crear un nuevo usuario.
 2.  Copiar el `token` JWT de la respuesta.
-3.  Hacer clic en el botón "Authorize" en Swagger y pegar el token en el
-    formato `Bearer {token}`.
+3.  Hacer clic en el botón "Authorize" en Swagger y pegar el token.
 4.  Usar `POST /client/encrypt-and-update-vault` para guardar de forma
     segura las credenciales.
 5.  Usar `POST /client/decrypt-vault` para descifrar y ver las
